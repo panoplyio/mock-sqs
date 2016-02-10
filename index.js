@@ -2,7 +2,7 @@ var extend = require( 'extend' );
 var uuid = require( 'node-uuid' );
 
 var queues = {};
-module.exports = SQS;
+module.exports.SQS = SQS;
 module.exports.reset = function () {
     queues = {};
 }
