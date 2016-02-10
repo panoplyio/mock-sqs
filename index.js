@@ -129,12 +129,17 @@ SQS.prototype.sendMessage = function ( params, callback ) {
         return;
     }
 
-    var attributes = params.MessageAttributes;
     var messageId = uuid.v4();
+    var attributes = {
+        SentTimestamp: new Date().getTime(),
+        ApproximateReceiveCount: 0,
+    };
+
     queue.messages.push({
         MessageId: messageId,
         Body: body,
-        MessageAttributes: extend( {}, attributes ) // copy
+        MessageAttributes: extend( {}, params.MessageAttributes ) // copy
+        Attributes: attributes
     })
 
     setTimeout( function () {
@@ -169,6 +174,12 @@ SQS.prototype.receiveMessage = function ( params, callback ) {
     var received = messages.slice( 0, max )
         .map( function ( message ) {
             message.ReceiptHandle = uuid.v4()
+            message.Attributes.ApproximateReceiveCount += 1;
+            if ( !message.Attributes.ApproximateFirstReceiveTimestamp ) {
+                var timestamp = new Date().getTime();
+                message.Attributes.ApproximateFirstReceiveTimestamp = timestamp;
+            }
+
             return message;
         });
 
