@@ -1,6 +1,6 @@
 {
   "name": "mock-sqs",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Mocking library for Amazon's SQS Node.js SDK",
   "main": "index.js",
   "scripts": {
