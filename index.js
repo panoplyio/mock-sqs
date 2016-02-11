@@ -40,10 +40,12 @@ SQS.prototype.createQueue = function ( params, callback ) {
         MaximumMessageSize: 262144,
         MessageRetentionPeriod: 345600,
         ReceiveMessageWaitTimeSeconds: 0,
-        VisibilityTimeout: 30
+        VisibilityTimeout: 30,
+        CreatedTimestamp: new Date().getTime()
     }, params.Attributes );
 
     queues[ qurl ] = {
+        name: qname,
         attributes: attributes,
         messages: []
     }
@@ -53,6 +55,50 @@ SQS.prototype.createQueue = function ( params, callback ) {
             QueueUrl: qurl
         })
     })
+}
+
+SQS.prototype.getQueueAttributes = function ( params, callback ) {
+    callback = callback || function () {}
+    params = extend( {}, this.params, params );
+
+    var qurl = params.QueueUrl;
+    if ( !qurl ) {
+        callback( new Error( 'QueueUrl is required' ) )
+        return
+    }
+
+    var queue = queues[ qurl ];
+    if ( !queue ) {
+        callback( new Error( 'Queue doesn\'t exist for Url:' + qurl ) );
+        return;
+    }
+
+    // add the approximations
+    var now = new Date().getTime();
+    var visible = queue.messages.filter( function ( message ) {
+        return !message._inflight
+            || message._inflight <= now;
+    }).length;
+    var invisible = queue.messages.length - visible;
+    queue.attributes.ApproximateNumberOfMessages = visible;
+    queue.attributes.ApproximateNumberOfMessagesNotVisible = invisible;
+
+    var names = params.AttributeNames || [ 'All' ];
+
+    var attributes = Object.keys( queue.attributes )
+        .filter( function ( key ) {
+            return names.indexOf( 'All' ) !== -1
+                || names.indexOf( key ) !== -1
+        })
+        .reduce( function ( attributes, key ) {
+            attributes[ key ] = queue.attributes[ key ]
+            return attributes
+        }, {} );
+
+    setTimeout( function () {
+        callback( null, { Attributes: attributes } )
+    })
+
 }
 
 SQS.prototype.deleteQueue = function ( params, callback ) {
@@ -74,7 +120,8 @@ SQS.prototype.listQueues = function ( params, callback ) {
     var prefix = params.QueueNamePrefix || '';
     var urls = Object.keys( queues )
         .filter( function ( qurl ) {
-            return qurl.indexOf( prefix ) === 0;
+            var name = queues[ qurl ].name;
+            return name.indexOf( prefix ) === 0;
         })
 
     setTimeout( function () {
@@ -138,7 +185,7 @@ SQS.prototype.sendMessage = function ( params, callback ) {
     queue.messages.push({
         MessageId: messageId,
         Body: body,
-        MessageAttributes: extend( {}, params.MessageAttributes ) // copy
+        MessageAttributes: extend( {}, params.MessageAttributes ), // copy
         Attributes: attributes
     })
 
@@ -164,15 +211,31 @@ SQS.prototype.receiveMessage = function ( params, callback ) {
         return;
     }
 
-    var max = params.MaxNumberOfMessages || 1;
+    var max = params.MaxNumberOfMessages === undefined
+        ? 1
+        : params.MaxNumberOfMessages;
+
     if ( max > 10 || max < 1 ) {
         callback( new Error( 'MaxNumberOfMessages out of range' ) );
         return;
     }
 
+    var vis = params.VisibilityTimeout === undefined
+        ? queue.attributes.VisibilityTimeout
+        : params.VisibilityTimeout;
+
+    var now = new Date().getTime();
+    var inflight = now + ( vis * 1000 );
+
     var messages = queue.messages;
-    var received = messages.slice( 0, max )
+    var received = messages
+        .filter( function ( message ) {
+            return !message._inflight
+                || message._inflight <= now;
+        })
+        .slice( 0, max )
         .map( function ( message ) {
+            message._inflight = inflight;
             message.ReceiptHandle = uuid.v4()
             message.Attributes.ApproximateReceiveCount += 1;
             if ( !message.Attributes.ApproximateFirstReceiveTimestamp ) {
@@ -180,6 +243,8 @@ SQS.prototype.receiveMessage = function ( params, callback ) {
                 message.Attributes.ApproximateFirstReceiveTimestamp = timestamp;
             }
 
+            message = extend( {}, message );
+            delete message._inflight;
             return message;
         });
 
@@ -211,9 +276,11 @@ SQS.prototype.deleteMessage = function ( params, callback ) {
         return;
     }
 
-    queue.messages = queue.messages.filter( function ( message ) {
-        return message.ReceiptHandle !== receipt;
+    var message = queue.messages.filter( function ( message ) {
+        return message.ReceiptHandle === receipt;
     })
+    var idx = queue.messages.indexOf( message );
+    queue.messages.splice( idx, 1 );
 
     setTimeout( function () {
         callback( null, {} )
